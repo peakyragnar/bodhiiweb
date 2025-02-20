@@ -14,7 +14,11 @@ export default function ChatInterface() {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isInConversation, setIsInConversation] = useState(false);
+  const [isSimplifiedView, setIsSimplifiedView] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const scrollToBottom = () => {
     if (messagesEndRef.current) {
@@ -26,37 +30,66 @@ export default function ChatInterface() {
     scrollToBottom();
   }, [messages]);
 
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      // Check if file is an image
+      if (!file.type.startsWith('image/')) {
+        alert('Please upload an image file');
+        return;
+      }
+      // Check file size (limit to 5MB)
+      if (file.size > 5 * 1024 * 1024) {
+        alert('File size should be less than 5MB');
+        return;
+      }
+      setSelectedFile(file);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim()) return;
+    if (!input.trim() && !selectedFile) return;
 
     if (!isInConversation) {
       setIsInConversation(true);
     }
 
-    const userMessage: Message = { role: 'user', content: input };
+    // Create new AbortController for this request
+    abortControllerRef.current = new AbortController();
+    const signal = abortControllerRef.current.signal;
+
+    const formData = new FormData();
+    formData.append('message', input);
+    if (selectedFile) {
+      formData.append('file', selectedFile);
+    }
+    if (messages.length > 0) {
+      formData.append('messages', JSON.stringify(messages));
+    }
+
+    const userMessage: Message = { 
+      role: 'user', 
+      content: selectedFile ? `[Image Upload] ${input}` : input 
+    };
     setMessages(prev => [...prev, userMessage]);
     setInput('');
+    setSelectedFile(null);
     setIsLoading(true);
 
     try {
       const response = await fetch('/api/chat', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ 
-          message: input,
-          messages: messages, // Include previous messages for context
-        }),
+        body: formData,
+        signal, // Add abort signal to fetch request
       });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
 
       const data = await response.json();
       
+      if (!response.ok) {
+        throw new Error(data.error || `HTTP error! status: ${response.status}`);
+      }
+
       if (data.error) {
         throw new Error(data.error);
       }
@@ -66,16 +99,27 @@ export default function ChatInterface() {
         content: data.response 
       };
       setMessages(prev => [...prev, assistantMessage]);
-    } catch (error) {
-      console.error('Error:', error);
-      setMessages(prev => [...prev, { 
-        role: 'assistant', 
-        content: 'Sorry, I encountered an error. Please try again.' 
-      }]);
+    } catch (error: any) {
+      // Only add error message if not aborted
+      if (error.name !== 'AbortError') {
+        console.error('Error:', error);
+        const errorMessage = error.message || 'Sorry, I encountered an error. Please try again.';
+        setMessages(prev => [...prev, { 
+          role: 'assistant', 
+          content: `Error: ${errorMessage}` 
+        }]);
+      }
     } finally {
       setIsLoading(false);
-      // Ensure we scroll to bottom after new message
+      abortControllerRef.current = null;
       setTimeout(scrollToBottom, 100);
+    }
+  };
+
+  const handleStop = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      setIsLoading(false);
     }
   };
 
@@ -94,9 +138,35 @@ export default function ChatInterface() {
       <nav className="bg-[#0A0B0E]/90 backdrop-blur-xl border-b border-white/5 p-4 sticky top-0 z-50">
         <div className="max-w-7xl mx-auto flex justify-between items-center">
           <div className="flex items-center space-x-3">
-            <Link href="/" className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 via-teal-300 to-emerald-400 text-2xl font-extrabold tracking-tighter hover:opacity-80 transition-opacity">
+            <Link 
+              href="/" 
+              onClick={() => {
+                setIsInConversation(false);
+                setMessages([]);
+                setInput('');
+                setIsSimplifiedView(false);
+              }} 
+              className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 via-teal-300 to-emerald-400 text-2xl font-extrabold tracking-tighter hover:opacity-80 transition-opacity"
+            >
               Bodhii
             </Link>
+            <button
+              onClick={() => {
+                setIsInConversation(false);
+                setMessages([]);
+                setInput('');
+                setIsSimplifiedView(true);
+              }}
+              className="group relative p-2 hover:bg-white/5 rounded-lg transition-all duration-300"
+              title="New fix"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5 text-gray-400 group-hover:text-white transition-colors">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+              </svg>
+              <span className="absolute -bottom-8 left-1/2 -translate-x-1/2 px-2 py-1 bg-gray-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
+                New fix
+              </span>
+            </button>
           </div>
           <div className="flex items-center space-x-6">
             {/* Social Icons */}
@@ -130,179 +200,295 @@ export default function ChatInterface() {
       <div className="flex flex-col h-[calc(100vh-80px)]">
         {!isInConversation ? (
           <div className="flex flex-col items-center justify-start pt-24 px-4">
-            <h1 className="text-6xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 via-teal-300 to-emerald-400 text-center mb-6 tracking-tight">
-              Your AI Home Repair Assistant
-            </h1>
-            <p className="text-gray-300 text-xl text-center mb-16 max-w-2xl font-light leading-relaxed">
-              Describe any home repair issue, and I'll guide you through the fix with step-by-step instructions
-            </p>
-
-            {/* Categories */}
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 max-w-4xl w-full mb-16">
-              {categories.map((category) => (
-                <button
-                  key={category.name}
-                  className="flex flex-col items-center justify-center p-6 rounded-2xl bg-[#1a1b1e]/50 hover:bg-[#1a1b1e] transition-all duration-300 border border-white/5 hover:border-white/10 backdrop-blur-sm hover:scale-105 group"
-                >
-                  <span className="text-3xl mb-3 group-hover:scale-110 transition-transform duration-300">{category.icon}</span>
-                  <span className="text-sm text-gray-300 font-medium">{category.name}</span>
-                </button>
-              ))}
-            </div>
-
-            <div className="w-full max-w-2xl px-4 mb-24">
-              <form onSubmit={handleSubmit} className="relative group">
-                <input
-                  type="text"
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  placeholder="Describe your home repair issue..."
-                  className="w-full p-6 pr-16 rounded-full bg-[#1a1b1e]/50 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500/50 border border-white/5 focus:border-white/10 transition-all duration-300 text-lg backdrop-blur-sm shadow-lg"
-                />
-                <button
-                  type="submit"
-                  disabled={!input.trim()}
-                  className={`absolute right-6 top-1/2 -translate-y-1/2 p-3 text-gray-400 hover:text-white transition-all duration-300 ${!input.trim() ? 'opacity-50 cursor-not-allowed' : 'hover:scale-110'}`}
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
-                  </svg>
-                </button>
-              </form>
-            </div>
-
-            {/* Testimonials Section */}
-            <div className="w-full max-w-5xl mb-24">
-              <h2 className="text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 via-teal-300 to-emerald-400 text-center mb-12">
-                Trusted by Homeowners Everywhere
-              </h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 px-4">
-                <div className="bg-[#1a1b1e]/50 p-8 rounded-2xl border border-white/5 backdrop-blur-sm hover:border-white/10 transition-all duration-300 hover:transform hover:scale-[1.02] group">
-                  <div className="flex items-center mb-6">
-                    <div className="w-12 h-12 rounded-xl bg-gradient-to-r from-blue-500 to-teal-400 flex items-center justify-center text-2xl shadow-lg shadow-blue-500/20">
-                      ⚡
-                    </div>
-                    <div className="ml-4">
-                      <h3 className="text-white font-semibold text-lg">Sarah M.</h3>
-                      <p className="text-gray-400 text-sm font-medium">Electrical Issue</p>
-                    </div>
-                  </div>
-                  <p className="text-gray-300 text-lg leading-relaxed font-light">"The AI helped me diagnose a tricky electrical problem in my kitchen. Saved me hundreds on an electrician visit!"</p>
-                </div>
-
-                <div className="bg-[#1a1b1e]/50 p-8 rounded-2xl border border-white/5 backdrop-blur-sm hover:border-white/10 transition-all duration-300 hover:transform hover:scale-[1.02] group">
-                  <div className="flex items-center mb-6">
-                    <div className="w-12 h-12 rounded-xl bg-gradient-to-r from-blue-500 to-teal-400 flex items-center justify-center text-2xl shadow-lg shadow-blue-500/20">
-                      🔧
-                    </div>
-                    <div className="ml-4">
-                      <h3 className="text-white font-semibold text-lg">Mike R.</h3>
-                      <p className="text-gray-400 text-sm font-medium">Plumbing Fix</p>
+            {isSimplifiedView ? (
+              <div className="w-full max-w-2xl px-4">
+                <form onSubmit={handleSubmit} className="relative group">
+                  <div className="flex items-center gap-2">
+                    <div className="relative flex-1">
+                      <input
+                        type="text"
+                        value={input}
+                        onChange={(e) => setInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && !e.shiftKey) {
+                            e.preventDefault();
+                            if (input.trim() || selectedFile) {
+                              handleSubmit(e);
+                            }
+                          }
+                        }}
+                        placeholder="Describe your home repair issue..."
+                        className="w-full p-6 pr-32 rounded-full bg-[#1a1b1e]/50 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500/50 border border-white/5 focus:border-white/10 transition-all duration-300 text-lg backdrop-blur-sm shadow-lg"
+                      />
+                      <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
+                        <input
+                          type="file"
+                          ref={fileInputRef}
+                          onChange={handleFileChange}
+                          accept="image/*"
+                          className="hidden"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => fileInputRef.current?.click()}
+                          className="p-3 text-gray-400 hover:text-white transition-all duration-300 hover:scale-110"
+                          title="Upload photo"
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" />
+                          </svg>
+                        </button>
+                        <button
+                          type="submit"
+                          disabled={(!input.trim() && !selectedFile) || isLoading}
+                          className={`p-3 text-gray-400 hover:text-white transition-all duration-300 ${(!input.trim() && !selectedFile) || isLoading ? 'opacity-50 cursor-not-allowed' : 'hover:scale-110'}`}
+                        >
+                          {isLoading ? (
+                            <svg className="animate-spin h-6 w-6" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                          ) : (
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
+                            </svg>
+                          )}
+                        </button>
+                      </div>
                     </div>
                   </div>
-                  <p className="text-gray-300 text-lg leading-relaxed font-light">"Step-by-step guidance helped me fix a leaky faucet. The instructions were clear and easy to follow."</p>
-                </div>
-
-                <div className="bg-[#1a1b1e]/50 p-8 rounded-2xl border border-white/5 backdrop-blur-sm hover:border-white/10 transition-all duration-300 hover:transform hover:scale-[1.02] group">
-                  <div className="flex items-center mb-6">
-                    <div className="w-12 h-12 rounded-xl bg-gradient-to-r from-blue-500 to-teal-400 flex items-center justify-center text-2xl shadow-lg shadow-blue-500/20">
-                      ❄️
+                  {selectedFile && (
+                    <div className="absolute -bottom-8 left-6 text-sm text-gray-400">
+                      Selected: {selectedFile.name}
                     </div>
-                    <div className="ml-4">
-                      <h3 className="text-white font-semibold text-lg">Lisa T.</h3>
-                      <p className="text-gray-400 text-sm font-medium">HVAC Maintenance</p>
-                    </div>
-                  </div>
-                  <p className="text-gray-300 text-lg leading-relaxed font-light">"Got my AC working again in the middle of summer! The troubleshooting steps were spot-on."</p>
-                </div>
+                  )}
+                </form>
               </div>
-            </div>
-          </div>
-        ) : (
-          <div className="flex-1 overflow-y-auto">
-            <div className="max-w-4xl mx-auto p-4">
-              <div className="flex flex-col-reverse">
-                <div ref={messagesEndRef} />
-                <div className="space-y-4">
-                  {messages.map((message, index) => (
-                    <div
-                      key={index}
-                      className={`flex ${message.role === 'assistant' ? 'bg-[#2a2b32]' : ''} p-4 rounded-xl`}
+            ) : (
+              <>
+                <h1 className="text-6xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 via-teal-300 to-emerald-400 text-center mb-6 tracking-tight">
+                  Your AI Home Repair Assistant
+                </h1>
+                <p className="text-gray-300 text-xl text-center mb-16 max-w-2xl font-light leading-relaxed">
+                  Describe any home repair issue, and I'll guide you through the fix with step-by-step instructions
+                </p>
+
+                {/* Categories */}
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 max-w-4xl w-full mb-16">
+                  {categories.map((category) => (
+                    <button
+                      key={category.name}
+                      className="flex flex-col items-center justify-center p-6 rounded-2xl bg-[#1a1b1e]/50 hover:bg-[#1a1b1e] transition-all duration-300 border border-white/5 hover:border-white/10 backdrop-blur-sm hover:scale-105 group"
                     >
-                      <div className="flex-shrink-0 mr-4">
-                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center 
-                          ${message.role === 'assistant' ? 'bg-gradient-to-r from-blue-500 to-teal-500' : 'bg-gray-600'}`}>
-                          {message.role === 'assistant' ? '🔧' : '👤'}
+                      <span className="text-3xl mb-3 group-hover:scale-110 transition-transform duration-300">{category.icon}</span>
+                      <span className="text-sm text-gray-300 font-medium">{category.name}</span>
+                    </button>
+                  ))}
+                </div>
+
+                <div className="w-full max-w-2xl px-4 mb-24">
+                  <form onSubmit={handleSubmit} className="relative group">
+                    <input
+                      type="text"
+                      value={input}
+                      onChange={(e) => setInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                          e.preventDefault();
+                          if (input.trim() || selectedFile) {
+                            handleSubmit(e);
+                          }
+                        }
+                      }}
+                      placeholder="Describe your home repair issue..."
+                      className="w-full p-6 pr-32 rounded-full bg-[#1a1b1e]/50 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500/50 border border-white/5 focus:border-white/10 transition-all duration-300 text-lg backdrop-blur-sm shadow-lg"
+                    />
+                    <div className="absolute right-6 top-1/2 -translate-y-1/2 flex items-center gap-2">
+                      <input
+                        type="file"
+                        ref={fileInputRef}
+                        onChange={handleFileChange}
+                        accept="image/*"
+                        className="hidden"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        className="p-3 text-gray-400 hover:text-white transition-all duration-300 hover:scale-110"
+                        title="Upload photo"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" />
+                        </svg>
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={(!input.trim() && !selectedFile) || isLoading}
+                        className={`p-3 text-gray-400 hover:text-white transition-all duration-300 ${(!input.trim() && !selectedFile) || isLoading ? 'opacity-50 cursor-not-allowed' : 'hover:scale-110'}`}
+                      >
+                        {isLoading ? (
+                          <svg className="animate-spin h-6 w-6" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                          </svg>
+                        ) : (
+                          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
+                          </svg>
+                        )}
+                      </button>
+                    </div>
+                    {selectedFile && (
+                      <div className="absolute -bottom-8 left-6 text-sm text-gray-400">
+                        Selected: {selectedFile.name}
+                      </div>
+                    )}
+                  </form>
+                </div>
+
+                {/* Testimonials Section */}
+                <div className="w-full max-w-5xl mb-24">
+                  <h2 className="text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 via-teal-300 to-emerald-400 text-center mb-12">
+                    Trusted by Homeowners Everywhere
+                  </h2>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 px-4">
+                    <div className="bg-[#1a1b1e]/50 p-8 rounded-2xl border border-white/5 backdrop-blur-sm hover:border-white/10 transition-all duration-300 hover:transform hover:scale-[1.02] group">
+                      <div className="flex items-center mb-6">
+                        <div className="w-12 h-12 rounded-xl bg-gradient-to-r from-blue-500 to-teal-400 flex items-center justify-center text-2xl shadow-lg shadow-blue-500/20">
+                          ⚡
+                        </div>
+                        <div className="ml-4">
+                          <h3 className="text-white font-semibold text-lg">Sarah M.</h3>
+                          <p className="text-gray-400 text-sm font-medium">Electrical Issue</p>
                         </div>
                       </div>
-                      <div className="flex-1 space-y-2 overflow-hidden">
-                        <div className="text-gray-100 prose prose-invert">
-                          <ReactMarkdown>{message.content}</ReactMarkdown>
+                      <p className="text-gray-300 text-lg leading-relaxed font-light">"The AI helped me diagnose a tricky electrical problem in my kitchen. Saved me hundreds on an electrician visit!"</p>
+                    </div>
+
+                    <div className="bg-[#1a1b1e]/50 p-8 rounded-2xl border border-white/5 backdrop-blur-sm hover:border-white/10 transition-all duration-300 hover:transform hover:scale-[1.02] group">
+                      <div className="flex items-center mb-6">
+                        <div className="w-12 h-12 rounded-xl bg-gradient-to-r from-blue-500 to-teal-400 flex items-center justify-center text-2xl shadow-lg shadow-blue-500/20">
+                          🔧
                         </div>
-                        {message.role === 'assistant' && (
-                          <div className="flex gap-2 mt-4">
-                            <button 
-                              onClick={() => {
-                                const utterance = new SpeechSynthesisUtterance(message.content);
-                                window.speechSynthesis.speak(utterance);
-                              }}
-                              className="p-2 bg-[#40414f] hover:bg-[#2b2c2f] rounded-lg text-gray-300 hover:text-white transition-all duration-200 flex items-center justify-center"
-                              title="Read Aloud"
-                            >
-                              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5">
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M19.114 5.636a9 9 0 010 12.728M16.463 8.288a5.25 5.25 0 010 7.424M6.75 8.25l4.72-4.72a.75.75 0 011.28.53v15.88a.75.75 0 01-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.01 9.01 0 012.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75z" />
-                              </svg>
-                            </button>
-                            <button 
-                              onClick={() => {
-                                navigator.clipboard.writeText(message.content);
-                              }}
-                              className="p-2 bg-[#40414f] hover:bg-[#2b2c2f] rounded-lg text-gray-300 hover:text-white transition-all duration-200 flex items-center justify-center"
-                              title="Copy"
-                            >
-                              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5">
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 002.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 00-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 00.75-.75 2.25 2.25 0 00-.1-.664m-5.8 0A2.251 2.251 0 0113.5 2.25H15c1.012 0 1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V8.25m0 0H4.875c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V9.375c0-.621-.504-1.125-1.125-1.125H8.25zM6.75 12h.008v.008H6.75V12zm0 3h.008v.008H6.75V15zm0 3h.008v.008H6.75V18z" />
-                              </svg>
-                            </button>
-                          </div>
+                        <div className="ml-4">
+                          <h3 className="text-white font-semibold text-lg">Mike R.</h3>
+                          <p className="text-gray-400 text-sm font-medium">Plumbing Fix</p>
+                        </div>
+                      </div>
+                      <p className="text-gray-300 text-lg leading-relaxed font-light">"Step-by-step guidance helped me fix a leaky faucet. The instructions were clear and easy to follow."</p>
+                    </div>
+
+                    <div className="bg-[#1a1b1e]/50 p-8 rounded-2xl border border-white/5 backdrop-blur-sm hover:border-white/10 transition-all duration-300 hover:transform hover:scale-[1.02] group">
+                      <div className="flex items-center mb-6">
+                        <div className="w-12 h-12 rounded-xl bg-gradient-to-r from-blue-500 to-teal-400 flex items-center justify-center text-2xl shadow-lg shadow-blue-500/20">
+                          ❄️
+                        </div>
+                        <div className="ml-4">
+                          <h3 className="text-white font-semibold text-lg">Lisa T.</h3>
+                          <p className="text-gray-400 text-sm font-medium">HVAC Maintenance</p>
+                        </div>
+                      </div>
+                      <p className="text-gray-300 text-lg leading-relaxed font-light">"Got my AC working again in the middle of summer! The troubleshooting steps were spot-on."</p>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        ) : (
+          <div className="flex-1 overflow-y-auto p-4">
+            <div className="max-w-3xl mx-auto space-y-4 pb-32">
+              {messages.map((message, index) => (
+                <div
+                  key={index}
+                  className={`flex ${message.role === 'assistant' ? 'justify-start' : 'justify-end'}`}
+                >
+                  <div
+                    className={`max-w-[85%] rounded-2xl p-4 ${
+                      message.role === 'assistant'
+                        ? 'bg-[#1a1b1e]/50 text-white'
+                        : 'bg-gradient-to-r from-blue-500 to-teal-400 text-white'
+                    }`}
+                  >
+                    <ReactMarkdown className="prose prose-invert">{message.content}</ReactMarkdown>
+                  </div>
+                </div>
+              ))}
+              <div ref={messagesEndRef} />
+            </div>
+            <div className="fixed bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-[#0A0B0E] via-[#0A0B0E] to-transparent">
+              <div className="max-w-3xl mx-auto">
+                <form onSubmit={handleSubmit} className="relative mb-8">
+                  <div className="flex items-center gap-2">
+                    <div className="relative flex-1">
+                      <input
+                        type="text"
+                        value={input}
+                        onChange={(e) => setInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && !e.shiftKey) {
+                            e.preventDefault();
+                            if (input.trim() || selectedFile) {
+                              handleSubmit(e);
+                            }
+                          }
+                        }}
+                        placeholder="Ask follow-up questions..."
+                        className="w-full p-4 pr-24 rounded-full bg-[#1a1b1e]/50 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500/50 border border-white/5 focus:border-white/10 transition-all duration-300 backdrop-blur-sm shadow-lg"
+                        disabled={isLoading}
+                      />
+                      <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
+                        <input
+                          type="file"
+                          ref={fileInputRef}
+                          onChange={handleFileChange}
+                          accept="image/*"
+                          className="hidden"
+                          disabled={isLoading}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => fileInputRef.current?.click()}
+                          className="p-2 text-gray-400 hover:text-white transition-all duration-300 hover:scale-110"
+                          title="Upload photo"
+                          disabled={isLoading}
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" />
+                          </svg>
+                        </button>
+                        {isLoading ? (
+                          <button
+                            type="button"
+                            onClick={handleStop}
+                            className="p-2 text-red-400 hover:text-red-300 transition-all duration-300 hover:scale-110"
+                            title="Stop generating"
+                          >
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M5.25 7.5A2.25 2.25 0 017.5 5.25h9a2.25 2.25 0 012.25 2.25v9a2.25 2.25 0 01-2.25 2.25h-9a2.25 2.25 0 01-2.25-2.25v-9z" />
+                            </svg>
+                          </button>
+                        ) : (
+                          <button
+                            type="submit"
+                            disabled={(!input.trim() && !selectedFile) || isLoading}
+                            className={`p-2 text-gray-400 hover:text-white transition-all duration-300 ${(!input.trim() && !selectedFile) || isLoading ? 'opacity-50 cursor-not-allowed' : 'hover:scale-110'}`}
+                          >
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
+                            </svg>
+                          </button>
                         )}
                       </div>
                     </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Fixed Input at Bottom */}
-        {isInConversation && (
-          <div className="w-full bg-gradient-to-t from-[#0A0B0E] to-[#0A0B0E]/80 backdrop-blur-xl border-t border-white/5 p-4">
-            <div className="max-w-4xl mx-auto">
-              <form onSubmit={handleSubmit} className="relative">
-                <input
-                  type="text"
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  placeholder="Ask follow-up questions..."
-                  className="w-full p-4 pr-12 rounded-full bg-[#1a1b1e]/50 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500/50 border border-white/5 focus:border-white/10 transition-all duration-300 backdrop-blur-sm shadow-lg"
-                  disabled={isLoading}
-                />
-                <button
-                  type="submit"
-                  disabled={!input.trim() || isLoading}
-                  className={`absolute right-3 top-1/2 -translate-y-1/2 p-2 text-gray-400 hover:text-white transition-colors 
-                    ${(!input.trim() || isLoading) ? 'opacity-50 cursor-not-allowed' : 'hover:scale-110'}`}
-                >
-                  {isLoading ? (
-                    <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-white"></div>
-                  ) : (
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
-                    </svg>
+                  </div>
+                  {selectedFile && (
+                    <div className="absolute -bottom-6 left-4 text-sm text-gray-400">
+                      Selected: {selectedFile.name}
+                    </div>
                   )}
-                </button>
-              </form>
+                </form>
+              </div>
             </div>
           </div>
         )}
