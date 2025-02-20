@@ -23,66 +23,65 @@ export async function POST(req: Request) {
     const signal = req.signal;
     const formData = await req.formData();
     const message = formData.get('message') as string;
-    const file = formData.get('file') as File | null;
+    const imageUrl = formData.get('image_url') as string | null;
     const messagesStr = formData.get('messages') as string;
     const previousMessages = messagesStr ? JSON.parse(messagesStr) : [];
 
     // Validate required fields
-    if (!message && !file) {
+    if (!message) {
       return new NextResponse(
-        JSON.stringify({ error: 'Message or file is required' }),
+        JSON.stringify({ error: 'Message is required' }),
         { status: 400, headers: { 'Content-Type': 'application/json' } }
       );
     }
 
-    let imageDescription = '';
-    if (file) {
-      const buffer = Buffer.from(await file.arrayBuffer());
-      const response = await openai.chat.completions.create({
-        model: "gpt-4o",
-        messages: [
-          {
-            role: "system",
-            content: "You are a knowledgeable home repair assistant. When analyzing images, focus on identifying any visible damage, maintenance issues, or areas that need attention."
-          },
-          {
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: "What do you see in this image related to home repair? Please describe any visible issues or damage."
-              },
-              {
-                type: "image_url",
-                image_url: {
-                  url: `data:${file.type};base64,${buffer.toString('base64')}`,
-                }
-              }
-            ]
-          }
-        ],
-        max_tokens: 300,
-      }, { signal });
-      imageDescription = response.choices[0].message.content || '';
-    }
-
     const systemMessage = {
       role: "system",
-      content: "You are a knowledgeable home repair assistant. Provide clear, step-by-step guidance for home repair issues, always prioritizing safety and proper techniques. If a repair seems too complex or dangerous, recommend professional help."
+      content: [
+        { 
+          type: "text", 
+          text: "You are a knowledgeable home repair assistant. Provide clear, step-by-step guidance for home repair issues, always prioritizing safety and proper techniques. If a repair seems too complex or dangerous, recommend professional help."
+        }
+      ]
     };
 
-    const userMessage = {
-      role: "user",
-      content: imageDescription ? `${message}\n\nImage Analysis: ${imageDescription}` : message
-    };
+    let userMessage;
+    if (imageUrl) {
+      userMessage = {
+        role: "user",
+        content: [
+          { type: "text", text: message },
+          { 
+            type: "image_url", 
+            image_url: { 
+              url: imageUrl.startsWith('data:') ? imageUrl : `data:image/jpeg;base64,${imageUrl}`
+            } 
+          }
+        ]
+      };
+    } else {
+      userMessage = {
+        role: "user",
+        content: [{ type: "text", text: message }]
+      };
+    }
 
-    const messages = [systemMessage, ...previousMessages, userMessage];
+    // Convert previous messages to the new format
+    const formattedPreviousMessages = previousMessages.map((msg: any) => ({
+      role: msg.role,
+      content: [{ type: "text", text: msg.content }]
+    }));
+
+    const messages = [systemMessage, ...formattedPreviousMessages, userMessage];
 
     const completion = await openai.chat.completions.create({
-      model: "gpt-4o",
+      model: "gpt-4-turbo",
       messages,
-      temperature: 0.7,
-      max_tokens: 500,
+      temperature: 1,
+      max_tokens: 2048,
+      top_p: 1,
+      frequency_penalty: 0,
+      presence_penalty: 0
     }, { signal });
 
     return new NextResponse(
@@ -99,33 +98,9 @@ export async function POST(req: Request) {
         { status: 499, headers: { 'Content-Type': 'application/json' } }
       );
     }
-    
-    // Handle specific OpenAI API errors
-    if (error?.code === 'invalid_api_key') {
-      return new NextResponse(
-        JSON.stringify({ error: 'Invalid OpenAI API key' }),
-        { status: 500, headers: { 'Content-Type': 'application/json' } }
-      );
-    }
-    
-    // Handle rate limiting
-    if (error?.status === 429) {
-      return new NextResponse(
-        JSON.stringify({ error: 'Too many requests. Please try again later.' }),
-        { status: 429, headers: { 'Content-Type': 'application/json' } }
-      );
-    }
-
-    // Handle model deprecation
-    if (error?.code === 'model_not_found') {
-      return new NextResponse(
-        JSON.stringify({ error: 'The model is currently unavailable. Please try again later.' }),
-        { status: 500, headers: { 'Content-Type': 'application/json' } }
-      );
-    }
 
     return new NextResponse(
-      JSON.stringify({ error: error.message || 'Internal Server Error' }),
+      JSON.stringify({ error: error.message || 'An error occurred' }),
       { status: 500, headers: { 'Content-Type': 'application/json' } }
     );
   }

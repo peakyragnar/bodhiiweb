@@ -3,6 +3,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import Link from 'next/link';
+import Logo from './Logo';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -146,9 +147,12 @@ export default function ChatInterface() {
                 setInput('');
                 setIsSimplifiedView(false);
               }} 
-              className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 via-teal-300 to-emerald-400 text-2xl font-extrabold tracking-tighter hover:opacity-80 transition-opacity"
+              className="flex items-center space-x-2 hover:opacity-80 transition-opacity"
             >
-              Bodhii
+              <Logo />
+              <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 via-teal-300 to-emerald-400 text-2xl font-extrabold tracking-tighter">
+                Bodhii
+              </span>
             </Link>
             <button
               onClick={() => {
