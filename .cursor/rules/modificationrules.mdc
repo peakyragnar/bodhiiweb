@@ -1,0 +1,9 @@
+---
+description: modification rules
+globs: 
+---
+
+- When asked to modify UI or view components, only edit files in app/components/ or client-side code in .tsx files.
+- Do not modify files in app/api/ unless explicitly instructed to change OpenAI API logic.
+- Use Next.js App Router conventions and TypeScript.
+
